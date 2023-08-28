@@ -501,9 +501,9 @@ class LiteXTerm:
         return length
 
     def boot(self):
-        print("[LITEX-TERM] Booting the device.")
+        print("[LITEX-TERM] Aborting transfer.")
         frame = SFLFrame()
-        frame.cmd = sfl_cmd_jump
+        frame.cmd = sfl_cmd_abort
         frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
         self.send_frame(frame)
 
