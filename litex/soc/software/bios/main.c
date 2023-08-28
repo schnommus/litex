@@ -50,11 +50,25 @@
 #include <liblitesdcard/sdcard.h>
 #include <liblitesata/sata.h>
 
+#define FLASH_START       0x100000
+#define FLASH_SZ          0x100000
+#define FLASH_MEM_START 0x40000000
+
 #ifndef CONFIG_BIOS_NO_BOOT
 static void boot_sequence(void)
 {
 #ifdef CSR_UART_BASE
-	if (serialboot() == 0)
+    int serial_boot = serialboot();
+    if (serial_boot == 2) {
+        printf("spiflash_erase_range(start=%x, len=%x)\n", FLASH_START, FLASH_SZ);
+        spiflash_erase_range(FLASH_START, FLASH_SZ);
+        printf("spiflash_write_stream(flash_start=%x, mem_start=%x, len=%x)\n", FLASH_START, FLASH_MEM_START, FLASH_SZ);
+        spiflash_write_stream(FLASH_START, (unsigned char *)FLASH_MEM_START, FLASH_SZ);
+        printf("Pull PROGRAMN low to trigger multiboot...\n");
+        programn_out_write(1);
+        return;
+    }
+	if (serial_boot == 0)
 		return;
 #endif
 #ifdef FLASH_BOOT_ADDRESS

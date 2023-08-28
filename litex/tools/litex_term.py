@@ -217,6 +217,7 @@ sfl_payload_length  = 255
 sfl_cmd_abort       = b"\x00"
 sfl_cmd_load        = b"\x01"
 sfl_cmd_jump        = b"\x02"
+sfl_cmd_flash_reboot = b"\x03"
 
 # Replies
 sfl_ack_success  = b"K"
@@ -287,13 +288,18 @@ def crc16(l):
 # LiteXTerm ----------------------------------------------------------------------------------------
 
 class LiteXTerm:
-    def __init__(self, serial_boot, kernel_image, kernel_address, json_images, safe):
+    def __init__(self, serial_boot, kernel_image, kernel_address, json_images, safe, bitstream, bitstream_address):
         self.serial_boot = serial_boot
         assert not (kernel_image is not None and json_images is not None)
         self.mem_regions = {}
+        self.bitstream_mem_regions = {}
         if kernel_image is not None:
             self.mem_regions = {kernel_image: kernel_address}
             self.boot_address = kernel_address
+        if bitstream is not None:
+            self.bitstream_mem_regions = {bitstream: kernel_address}
+            self.boot_address = bitstream_address
+        self.bitstream_uploaded = False
         if json_images is not None:
             f = open(json_images, "r")
             json_dir = os.path.dirname(json_images)
@@ -500,10 +506,17 @@ class LiteXTerm:
         f.close()
         return length
 
-    def boot(self):
-        print("[LITEX-TERM] Aborting transfer.")
+    def boot_flash(self):
+        print("[LITEX-TERM] Transfer complete. Copying to SPI flash and rebooting...")
         frame = SFLFrame()
-        frame.cmd = sfl_cmd_abort
+        frame.cmd = sfl_cmd_flash_reboot
+        frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
+        self.send_frame(frame)
+
+    def boot(self):
+        print("[LITEX-TERM] Transfer complete. Jumping...")
+        frame = SFLFrame()
+        frame.cmd = sfl_cmd_jump
         frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
         self.send_frame(frame)
 
@@ -527,11 +540,19 @@ class LiteXTerm:
 
     def answer_magic(self):
         print("[LITEX-TERM] Received firmware download request from the device.")
-        if(len(self.mem_regions)):
+        if(len(self.mem_regions) or len(self.bitstream_mem_regions)):
             self.port.write(sfl_magic_ack)
-        for filename, base in self.mem_regions.items():
-            self.upload(filename, int(base, 16))
-        self.boot()
+        if len(self.bitstream_mem_regions) and not self.bitstream_uploaded:
+            print("[LITEX-TERM] Flashing bitstream.")
+            for filename, base in self.bitstream_mem_regions.items():
+                self.upload(filename, int(base, 16))
+            self.boot_flash()
+            self.bitstream_uploaded = True
+        else:
+            print("[LITEX-TERM] Uploading kernel.")
+            for filename, base in self.mem_regions.items():
+                self.upload(filename, int(base, 16))
+            self.boot()
         print("[LITEX-TERM] Done.")
 
     def reader(self):
@@ -540,7 +561,7 @@ class LiteXTerm:
                 c = self.port.read()
                 sys.stdout.buffer.write(c)
                 sys.stdout.flush()
-                if len(self.mem_regions):
+                if len(self.mem_regions) or len(self.bitstream_mem_regions):
                     if self.serial_boot and self.detect_prompt(c):
                         self.answer_prompt()
                     if self.detect_magic(c):
@@ -612,6 +633,8 @@ def _get_args():
     parser.add_argument("--serial-boot",  default=False, action='store_true', help="Automatically initiate serial boot.")
     parser.add_argument("--kernel",       default=None,                       help="Kernel image.")
     parser.add_argument("--kernel-adr",   default="0x40000000",               help="Kernel address.")
+    parser.add_argument("--bitstream",    default=None,                       help="Bitstream image.")
+    parser.add_argument("--bitstream-adr",   default="0x40000000",               help="Kernel address.")
     parser.add_argument("--images",       default=None,                       help="JSON description of the images to load to memory.")
     parser.add_argument("--safe",         action="store_true",                help="Safe serial boot mode, disable upload speed optimizations.")
 
@@ -626,7 +649,7 @@ def _get_args():
 
 def main():
     args = _get_args()
-    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images, args.safe)
+    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images, args.safe, args.bitstream, args.bitstream_adr)
 
     if sys.platform == "win32":
         if args.port in ["crossover", "jtag"]:

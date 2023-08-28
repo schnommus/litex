@@ -245,6 +245,14 @@ int serialboot(void)
 				uart_write(SFL_ACK_SUCCESS);
 				return 1;
 
+			/* On SFL_CMD_FLASH_REBOOT ... */
+			case SFL_CMD_FLASH_REBOOT:
+				/* Reset failures */
+				failures = 0;
+				/* Acknowledge and exit */
+				uart_write(SFL_ACK_SUCCESS);
+				return 2;
+
 			/* On SFL_CMD_LOAD... */
 			case SFL_CMD_LOAD: {
 				char *load_addr;
