@@ -172,9 +172,9 @@ class SimSoC(SoCCore):
         with_video_terminal = False,
         sim_debug             = False,
         trace_reset_on        = False,
+        sys_clk_freq = int(1e6),
         **kwargs):
         platform     = Platform()
-        sys_clk_freq = int(1e6)
 
         # CRG --------------------------------------------------------------------------------------
         self.crg = CRG(platform.request("sys_clk"))
@@ -435,7 +435,7 @@ def sim_args(parser):
     parser.add_argument("--gtkwave-savefile",     action="store_true",     help="Generate GTKWave savefile.")
     parser.add_argument("--non-interactive",      action="store_true",     help="Run simulation without user input.")
 
-def main():
+def main(sys_clk_freq=1e6, soc_extension_hook=None):
     from litex.build.parser import LiteXArgumentParser
     parser = LiteXArgumentParser(description="LiteX SoC Simulation utility")
     parser.set_platform(SimPlatform)
@@ -444,9 +444,8 @@ def main():
 
     soc_kwargs = soc_core_argdict(args)
 
-    sys_clk_freq = int(1e6)
     sim_config   = SimConfig()
-    sim_config.add_clocker("sys_clk", freq_hz=sys_clk_freq)
+    sim_config.add_clocker("sys_clk", freq_hz=int(sys_clk_freq))
 
     # Configuration --------------------------------------------------------------------------------
 
@@ -456,7 +455,7 @@ def main():
         sim_config.add_module("serial2console", "serial")
 
     # Create config SoC that will be used to prepare/configure real one.
-    conf_soc = SimSoC(**soc_kwargs)
+    conf_soc = SimSoC(**soc_kwargs, sys_clk_freq=sys_clk_freq)
 
     # ROM.
     if args.rom_init:
@@ -512,6 +511,7 @@ def main():
 
     # SoC ------------------------------------------------------------------------------------------
     soc = SimSoC(
+        sys_clk_freq = sys_clk_freq,
         with_sdram             = args.with_sdram,
         with_sdram_bist        = args.with_sdram_bist,
         with_ethernet          = args.with_ethernet,
@@ -537,6 +537,9 @@ def main():
             soc.add_constant("LOCALIP{}".format(i+1), int(args.local_ip.split(".")[i]))
         for i in range(4):
             soc.add_constant("REMOTEIP{}".format(i+1), int(args.remote_ip.split(".")[i]))
+
+    if soc_extension_hook is not None:
+        soc_extension_hook(sim_config, soc)
 
     # Build/Run ------------------------------------------------------------------------------------
     def pre_run_callback(vns):
