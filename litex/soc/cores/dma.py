@@ -12,6 +12,7 @@ from litex.gen import *
 from litex.gen.common import reverse_bytes
 
 from litex.soc.interconnect.csr import *
+from litex.soc.interconnect.csr_eventmanager import *
 from litex.soc.interconnect import stream
 from litex.soc.interconnect import wishbone
 
@@ -155,7 +156,7 @@ class WishboneDMAWriter(LiteXModule):
         if with_csr:
             self.add_csr()
 
-    def add_csr(self, default_base=0, default_length=0, default_enable=0, default_loop=0, ready_on_idle=1):
+    def add_csr(self, default_base=0, default_length=0, default_enable=0, default_loop=0, ready_on_idle=1, with_irq=True):
         self._sink = self.sink
         self.sink  = stream.Endpoint([("data", self.bus.data_width)])
 
@@ -176,6 +177,18 @@ class WishboneDMAWriter(LiteXModule):
         self.comb += length.eq(self._length.storage[shift:])
 
         self.comb += self._offset.status.eq(offset)
+
+        # IRQ logic
+
+        if with_irq:
+            self.ev = EventManager()
+            self.ev.half = EventSourceProcess(edge="rising")
+            self.ev.done = EventSourceProcess(edge="rising")
+            self.comb += [
+                self.ev.half.trigger.eq((length >> 1) == offset),
+                self.ev.done.trigger.eq(self._sink.last),
+            ]
+            self.ev.finalize()
 
         fsm = FSM(reset_state="IDLE")
         fsm = ResetInserter()(fsm)
