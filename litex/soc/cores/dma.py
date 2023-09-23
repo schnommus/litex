@@ -74,7 +74,7 @@ class WishboneDMAReader(LiteXModule):
         if with_csr:
             self.add_csr()
 
-    def add_csr(self, default_base=0, default_length=0, default_enable=0, default_loop=0):
+    def add_csr(self, default_base=0, default_length=0, default_enable=0, default_loop=0, with_irq=True):
         self._base   = CSRStorage(64, reset=default_base)
         self._length = CSRStorage(32, reset=default_length)
         self._enable = CSRStorage(reset=default_enable)
@@ -92,6 +92,17 @@ class WishboneDMAReader(LiteXModule):
         self.comb += length.eq(self._length.storage[shift:])
 
         self.comb += self._offset.status.eq(offset)
+
+        # IRQ logic
+
+        if with_irq:
+            self.ev = EventManager()
+            self.ev.half = EventSourceProcess(edge="rising")
+            self.comb += [
+                self.ev.half.trigger.eq(
+                    ((length >> 1) == offset) | self.sink.last),
+            ]
+            self.ev.finalize()
 
         fsm = FSM(reset_state="IDLE")
         fsm = ResetInserter()(fsm)
@@ -183,10 +194,9 @@ class WishboneDMAWriter(LiteXModule):
         if with_irq:
             self.ev = EventManager()
             self.ev.half = EventSourceProcess(edge="rising")
-            self.ev.done = EventSourceProcess(edge="rising")
             self.comb += [
-                self.ev.half.trigger.eq((length >> 1) == offset),
-                self.ev.done.trigger.eq(self._sink.last),
+                self.ev.half.trigger.eq(
+                    ((length >> 1) == offset) | self._sink.last),
             ]
             self.ev.finalize()
 
