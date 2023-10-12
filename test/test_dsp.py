@@ -141,96 +141,46 @@ class LadderLpf(Module):
         fsm = FSM(reset_state="WAIT-SINK-VALID")
         self.submodules += fsm
 
+        def fsm_mac(this_state, next_state,
+                    a, b, c, z):
+            """Construct a state to pend an a*b+c MAC and transition once done."""
+            fsm.act(this_state,
+                self.mac_sink.payload.a.eq(a),
+                self.mac_sink.payload.b.eq(b),
+                self.mac_sink.payload.c.eq(c),
+                self.mac_sink.valid.eq(1),
+                self.mac_source.ready.eq(1),
+                If(self.mac_source.valid,
+                   NextValue(z, self.mac_source.payload.z),
+                   NextState(next_state),
+                )
+            )
+
         fsm.act("WAIT-SINK-VALID",
             # Wait for incoming sample
             self.sink.ready.eq(1),
-            self.source.valid.eq(0),
             # Latch it and start processing
             If(self.sink.valid,
                NextValue(self.x, self.sink.payload.sample),
-               NextState("WAIT-MAC-RESONANCE"),
+               NextState("MAC-RESONANCE"),
             )
         )
-        fsm.act("WAIT-MAC-RESONANCE",
-            self.sink.ready.eq(0),
-            self.source.valid.eq(0),
-
-            self.mac_sink.payload.a.eq(self.x - self.y),
-            self.mac_sink.payload.b.eq(self.resonance),
-            self.mac_sink.payload.c.eq(self.x),
-            self.mac_sink.valid.eq(1),
-            self.mac_source.ready.eq(1),
-            If(self.mac_source.valid,
-               NextValue(self.rezz, self.mac_source.payload.z),
-               NextState("SATURATION"),
-            )
-        )
+        fsm_mac("MAC-RESONANCE", "SATURATION",
+                self.x - self.y, self.resonance, self.x, self.rezz)
         fsm.act("SATURATION",
-            self.sink.ready.eq(0),
-            self.source.valid.eq(0),
             #TODO: Add back saturation!
             NextValue(self.sat, self.rezz),
-            NextState("WAIT-MAC-LADDER0"),
+            NextState("MAC-LADDER0"),
         )
-        # TODO: How to metaprogram these?
-        fsm.act("WAIT-MAC-LADDER0",
-            self.sink.ready.eq(0),
-            self.source.valid.eq(0),
-
-            self.mac_sink.payload.a.eq(self.sat - self.a1),
-            self.mac_sink.payload.b.eq(self.g),
-            self.mac_sink.payload.c.eq(self.a1),
-            self.mac_sink.valid.eq(1),
-            self.mac_source.ready.eq(1),
-            If(self.mac_source.valid,
-               NextValue(self.a1, self.mac_source.payload.z),
-               NextState("WAIT-MAC-LADDER1"),
-            )
-        )
-        fsm.act("WAIT-MAC-LADDER1",
-            self.sink.ready.eq(0),
-            self.source.valid.eq(0),
-
-            self.mac_sink.payload.a.eq(self.a1 - self.a2),
-            self.mac_sink.payload.b.eq(self.g),
-            self.mac_sink.payload.c.eq(self.a2),
-            self.mac_sink.valid.eq(1),
-            self.mac_source.ready.eq(1),
-            If(self.mac_source.valid,
-               NextValue(self.a2, self.mac_source.payload.z),
-               NextState("WAIT-MAC-LADDER2"),
-            )
-        )
-        fsm.act("WAIT-MAC-LADDER2",
-            self.sink.ready.eq(0),
-            self.source.valid.eq(0),
-
-            self.mac_sink.payload.a.eq(self.a2 - self.a3),
-            self.mac_sink.payload.b.eq(self.g),
-            self.mac_sink.payload.c.eq(self.a3),
-            self.mac_sink.valid.eq(1),
-            self.mac_source.ready.eq(1),
-            If(self.mac_source.valid,
-               NextValue(self.a3, self.mac_source.payload.z),
-               NextState("WAIT-MAC-LADDER3"),
-            )
-        )
-        fsm.act("WAIT-MAC-LADDER3",
-            self.sink.ready.eq(0),
-            self.source.valid.eq(0),
-
-            self.mac_sink.payload.a.eq(self.a3 - self.y),
-            self.mac_sink.payload.b.eq(self.g),
-            self.mac_sink.payload.c.eq(self.y),
-            self.mac_sink.valid.eq(1),
-            self.mac_source.ready.eq(1),
-            If(self.mac_source.valid,
-               NextValue(self.y, self.mac_source.payload.z),
-               NextState("WAIT-SOURCE-READY"),
-            )
-        )
+        fsm_mac("MAC-LADDER0", "MAC-LADDER1",
+                self.sat - self.a1, self.g, self.a1, self.a1)
+        fsm_mac("MAC-LADDER1", "MAC-LADDER2",
+                self.a1 - self.a2, self.g, self.a2, self.a2)
+        fsm_mac("MAC-LADDER2", "MAC-LADDER3",
+                self.a2 - self.a3, self.g, self.a3, self.a3)
+        fsm_mac("MAC-LADDER3", "WAIT-SOURCE-READY",
+                self.a3 - self.y, self.g, self.y, self.y)
         fsm.act("WAIT-SOURCE-READY",
-            self.sink.ready.eq(0),
             self.source.valid.eq(1),
             self.source.payload.sample.eq(self.y),
             If(self.source.ready,
