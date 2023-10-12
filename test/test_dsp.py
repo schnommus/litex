@@ -118,6 +118,133 @@ class DcBlock(Module):
             )
         )
 
+class LadderLpf(Module):
+    def __init__(self, mac, dw=32, fbits=16):
+        dtype = (dw, True) # signed, dw-wide
+        self.sink = Endpoint([("sample", dtype)])
+        self.source = Endpoint([("sample", dtype)])
+        self.mac_sink, self.mac_source = mac.get_port()
+
+        # Tweakable from outside this core.
+        self.g          = Signal(dtype) # filter cutoff
+        self.resonance  = Signal(dtype) # filter resonance
+
+        # Registers used throughout state transitions
+        self.x          = Signal(dtype)
+        self.rezz       = Signal(dtype)
+        self.sat        = Signal(dtype)
+        self.a1         = Signal(dtype)
+        self.a2         = Signal(dtype)
+        self.a3         = Signal(dtype)
+        self.y          = Signal(dtype)
+
+        fsm = FSM(reset_state="WAIT-SINK-VALID")
+        self.submodules += fsm
+
+        fsm.act("WAIT-SINK-VALID",
+            # Wait for incoming sample
+            self.sink.ready.eq(1),
+            self.source.valid.eq(0),
+            # Latch it and start processing
+            If(self.sink.valid,
+               NextValue(self.x, self.sink.payload.sample),
+               NextState("WAIT-MAC-RESONANCE"),
+            )
+        )
+        fsm.act("WAIT-MAC-RESONANCE",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(0),
+
+            self.mac_sink.payload.a.eq(self.x - self.y),
+            self.mac_sink.payload.b.eq(self.resonance),
+            self.mac_sink.payload.c.eq(self.x),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.rezz, self.mac_source.payload.z),
+               NextState("SATURATION"),
+            )
+        )
+        fsm.act("SATURATION",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(0),
+
+            If(self.rezz > float_to_fp(1),
+               NextValue(self.sat, float_to_fp(1)),
+            ).Elif(self.rezz < float_to_fp(-1),
+               NextValue(self.sat, float_to_fp(-1)),
+            ).Else(
+               NextValue(self.sat, self.rezz),
+            ),
+
+            NextState("WAIT-MAC-LADDER0"),
+        )
+        # TODO: How to metaprogram these?
+        fsm.act("WAIT-MAC-LADDER0",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(0),
+
+            self.mac_sink.payload.a.eq(self.sat - self.a1),
+            self.mac_sink.payload.b.eq(self.g),
+            self.mac_sink.payload.c.eq(self.a1),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.a1, self.mac_source.payload.z),
+               NextState("WAIT-MAC-LADDER1"),
+            )
+        )
+        fsm.act("WAIT-MAC-LADDER1",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(0),
+
+            self.mac_sink.payload.a.eq(self.a1 - self.a2),
+            self.mac_sink.payload.b.eq(self.g),
+            self.mac_sink.payload.c.eq(self.a2),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.a2, self.mac_source.payload.z),
+               NextState("WAIT-MAC-LADDER2"),
+            )
+        )
+        fsm.act("WAIT-MAC-LADDER2",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(0),
+
+            self.mac_sink.payload.a.eq(self.a2 - self.a3),
+            self.mac_sink.payload.b.eq(self.g),
+            self.mac_sink.payload.c.eq(self.a3),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.a3, self.mac_source.payload.z),
+               NextState("WAIT-MAC-LADDER3"),
+            )
+        )
+        fsm.act("WAIT-MAC-LADDER3",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(0),
+
+            self.mac_sink.payload.a.eq(self.a3 - self.y),
+            self.mac_sink.payload.b.eq(self.g),
+            self.mac_sink.payload.c.eq(self.y),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.y, self.mac_source.payload.z),
+               NextState("WAIT-SOURCE-READY"),
+            )
+        )
+        fsm.act("WAIT-SOURCE-READY",
+            self.sink.ready.eq(0),
+            self.source.valid.eq(1),
+            self.source.payload.sample.eq(self.y),
+            If(self.source.ready,
+               NextValue(self.source.valid, 0),
+               NextState("WAIT-SINK-VALID"),
+            )
+        )
 
 class TestDSP(unittest.TestCase):
     def test_fixmac(self):
@@ -233,3 +360,45 @@ class TestDSP(unittest.TestCase):
                     print("wait for dc.source.valid...")
                     yield
         run_simulation(dut, generator(dut), vcd_name="test_dcblock.vcd")
+
+    def test_ladder_lpf_single(self):
+        print()
+
+        class LadderDUT(Module):
+            def __init__(self):
+                self.submodules.rrmac = RRMac(n=2)
+                self.submodules.lpf = LadderLpf(mac=self.rrmac)
+
+        dut = LadderDUT()
+        print(verilog.convert(dut))
+
+        def generator(dut):
+            lpf = dut.lpf
+            yield lpf.g.eq(float_to_fp(0.25))
+            samples = [0.2 * math.sin((n / 10) / 2*math.pi) for n in range(20)]
+            yield lpf.source.ready.eq(1)
+            for sample in samples:
+                # Wait for DUT to be ready for a sample
+                while not (yield lpf.sink.ready):
+                    print("wait for lpf.sink.ready...")
+                    yield
+                # Clock in 1 sample
+                print("clock in 1 sample")
+                yield lpf.sink.payload.sample.eq(float_to_fp(sample))
+                yield lpf.sink.valid.eq(1)
+                yield
+                # Wait for the output
+                yield lpf.sink.valid.eq(0)
+                while (yield lpf.source.valid != 1):
+                    print("wait for lpf.source.valid...")
+                    yield
+                print((yield lpf.x))
+                print((yield lpf.rezz))
+                print((yield lpf.sat))
+                print((yield lpf.a1))
+                print((yield lpf.a2))
+                print((yield lpf.a3))
+                print((yield lpf.y))
+                sample_out = yield lpf.source.payload.sample
+                print ("out", hex(sample_out), fp_to_float(sample_out))
+        run_simulation(dut, generator(dut), vcd_name="test_lpf.vcd")
