@@ -168,15 +168,8 @@ class LadderLpf(Module):
         fsm.act("SATURATION",
             self.sink.ready.eq(0),
             self.source.valid.eq(0),
-
-            If(self.rezz > float_to_fp(1),
-               NextValue(self.sat, float_to_fp(1)),
-            ).Elif(self.rezz < float_to_fp(-1),
-               NextValue(self.sat, float_to_fp(-1)),
-            ).Else(
-               NextValue(self.sat, self.rezz),
-            ),
-
+            #TODO: Add back saturation!
+            NextValue(self.sat, self.rezz),
             NextState("WAIT-MAC-LADDER0"),
         )
         # TODO: How to metaprogram these?
@@ -370,35 +363,31 @@ class TestDSP(unittest.TestCase):
                 self.submodules.lpf = LadderLpf(mac=self.rrmac)
 
         dut = LadderDUT()
-        print(verilog.convert(dut))
+        #print(verilog.convert(dut))
 
         def generator(dut):
             lpf = dut.lpf
-            yield lpf.g.eq(float_to_fp(0.25))
-            samples = [0.2 * math.sin((n / 10) / 2*math.pi) for n in range(20)]
+            samples = [0.2 * math.sin((n / 20) * 2*math.pi) +
+                       0.2 * math.sin((n / 5) * 2*math.pi) for n in range(100)]
+            print(samples)
             yield lpf.source.ready.eq(1)
-            for sample in samples:
-                # Wait for DUT to be ready for a sample
-                while not (yield lpf.sink.ready):
-                    print("wait for lpf.sink.ready...")
+            for g_set in [1, 0.5, 0.25, 0.125]:
+                yield lpf.g.eq(float_to_fp(g_set))
+                for sample in samples:
+                    # Wait for DUT to be ready for a sample
+                    while not (yield lpf.sink.ready):
+                        print("wait for lpf.sink.ready...")
+                        yield
+                    # Clock in 1 sample
+                    print("clock in 1 sample")
+                    yield lpf.sink.payload.sample.eq(float_to_fp(sample))
+                    yield lpf.sink.valid.eq(1)
                     yield
-                # Clock in 1 sample
-                print("clock in 1 sample")
-                yield lpf.sink.payload.sample.eq(float_to_fp(sample))
-                yield lpf.sink.valid.eq(1)
-                yield
-                # Wait for the output
-                yield lpf.sink.valid.eq(0)
-                while (yield lpf.source.valid != 1):
-                    print("wait for lpf.source.valid...")
-                    yield
-                print((yield lpf.x))
-                print((yield lpf.rezz))
-                print((yield lpf.sat))
-                print((yield lpf.a1))
-                print((yield lpf.a2))
-                print((yield lpf.a3))
-                print((yield lpf.y))
-                sample_out = yield lpf.source.payload.sample
-                print ("out", hex(sample_out), fp_to_float(sample_out))
+                    # Wait for the output
+                    yield lpf.sink.valid.eq(0)
+                    while (yield lpf.source.valid != 1):
+                        #print("wait for lpf.source.valid...")
+                        yield
+                    sample_out = yield lpf.source.payload.sample
+                    print ("out", hex(sample_out), fp_to_float(sample_out))
         run_simulation(dut, generator(dut), vcd_name="test_lpf.vcd")
