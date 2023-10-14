@@ -138,6 +138,10 @@ class LadderLpf(Module):
         self.a3         = Signal(dtype)
         self.y          = Signal(dtype)
 
+        # Saturation thresholds
+        SAT_HI = Constant(float_to_fp(1.0), dtype)
+        SAT_LO = -Constant(float_to_fp(1.0), dtype)
+
         fsm = FSM(reset_state="WAIT-SINK-VALID")
         self.submodules += fsm
 
@@ -168,8 +172,13 @@ class LadderLpf(Module):
         fsm_mac("MAC-RESONANCE", "SATURATION",
                 self.x - self.y, self.resonance, self.x, self.rezz)
         fsm.act("SATURATION",
-            #TODO: Add back saturation!
-            NextValue(self.sat, self.rezz),
+            If(self.rezz > SAT_HI,
+                NextValue(self.sat, SAT_HI),
+            ).Elif(self.rezz < SAT_LO,
+                NextValue(self.sat, SAT_LO),
+            ).Else(
+                NextValue(self.sat, self.rezz),
+            ),
             NextState("MAC-LADDER0"),
         )
         fsm_mac("MAC-LADDER0", "MAC-LADDER1",
@@ -323,6 +332,7 @@ class TestDSP(unittest.TestCase):
             yield lpf.source.ready.eq(1)
             for g_set in [1, 0.5, 0.25, 0.125]:
                 yield lpf.g.eq(float_to_fp(g_set))
+                yield lpf.resonance.eq(float_to_fp(0.0))
                 for sample in samples:
                     # Wait for DUT to be ready for a sample
                     while not (yield lpf.sink.ready):
