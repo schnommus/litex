@@ -198,6 +198,88 @@ class LadderLpf(Module):
             )
         )
 
+class DelayLine(Module):
+    """
+    - Accepts sample_write, each one written to an incrementing
+    index in a local circular buffer.
+    - Accepts delay_addr, each of which emits a sample_read, which
+    is the value of the sample delay_addr elements later than the
+    last 'sample_write' to occur up to MAX_DELAY.
+
+    Note: NeoPixel example in led.py has example of wishbone-mapped
+    Memory that could be used for wavetable loading?
+    """
+    def __init__(self, sw=16, dw=32, fbits=16, max_delay=512):
+        stype = (sw, True) # signed, sw-wide samples
+        dtype = (dw, True) # signed, dw-wide delays
+
+        # TODO: ensure max_delay is POW2!
+
+        # Sink for writes to Delayline
+        self.wsink = Endpoint([("sample", stype)])
+
+        # Source/sink for reads
+        self.sink  = Endpoint([("delay",  dtype)])
+        self.source = Endpoint([("sample", stype)])
+
+        # Create memory and write pointer
+        storage = Memory(width=sw, depth=max_delay)
+        # Register, incremented on every write.
+        wrpointer = Signal(max=max_delay, reset=0)
+        # Wire, address into memory of current read.
+        rdpointer = Signal(max=max_delay)
+
+        # Create dual-port memory
+        wport = storage.get_port(write_capable=True)
+        # Async read is necessary for passthrough combinatorial read sink/source
+        rport = storage.get_port(async_read=True)
+        self.specials += [
+            storage,
+            wport,
+            rport
+        ]
+
+        # Connect up read side
+        #
+        # self.sink: fractional delay, top (dw-fbits) index into the buffer
+        #            at current sample + delay samples (wrapped).
+        # self.source: sample at this position in the buffer
+        self.comb += [
+            # Read pointer must be wrapped to max delay
+            rdpointer.eq(
+                (wrpointer - (self.sink.delay >> fbits)) & (max_delay-1)
+            ),
+            rport.adr.eq(rdpointer),
+            self.source.sample.eq(rport.dat_r),
+            # Connect as stream CombinatorialActor
+            self.source.valid.eq(self.sink.valid),
+            self.source.first.eq(self.sink.first),
+            self.source.last.eq(self.sink.last),
+            self.sink.ready.eq(self.source.ready),
+        ]
+
+        # Connect up write side
+        #
+        # self.wsink: stream => circular buffer
+        self.comb += [
+            wport.adr.eq(wrpointer),
+            wport.we.eq(self.wsink.valid),
+            wport.dat_w.eq(self.wsink.sample),
+            self.wsink.ready.eq(1),
+        ]
+
+        # Increment circular buffer pointer on every write operation.
+        self.sync += [
+            If(wport.we,
+               If(wrpointer != (max_delay - 1),
+                   wrpointer.eq(wrpointer + 1)
+               ).Else(
+                   wrpointer.eq(0)
+               )
+            )
+        ]
+
+
 class TestDSP(unittest.TestCase):
     def test_fixmac(self):
         dut = FixMac()
@@ -313,6 +395,7 @@ class TestDSP(unittest.TestCase):
                     yield
         run_simulation(dut, generator(dut), vcd_name="test_dcblock.vcd")
 
+    """
     def test_ladder_lpf_single(self):
         print()
 
@@ -351,3 +434,46 @@ class TestDSP(unittest.TestCase):
                     sample_out = yield lpf.source.payload.sample
                     print ("out", hex(sample_out), fp_to_float(sample_out))
         run_simulation(dut, generator(dut), vcd_name="test_lpf.vcd")
+        """
+    def test_delayline(self):
+        print()
+
+        class DelayLineDUT(Module):
+            def __init__(self):
+                self.submodules.delayln = DelayLine(max_delay=32)
+
+        dut = DelayLineDUT()
+
+        print(verilog.convert(dut))
+
+        def generator(dut):
+            samples = [0]*2 + [0xDEAD, 0xBEEF] + [0]*16
+            delayln = dut.delayln
+            yield delayln.sink.valid.eq(1)
+            yield delayln.source.ready.eq(1)
+            for sample in samples:
+                # Write
+                yield delayln.wsink.valid.eq(1)
+                yield delayln.wsink.payload.sample.eq(sample)
+                yield
+                print(f". in={hex(sample)}\tout1=---\tout2=---\tout3=---")
+                # Stop write
+                yield delayln.wsink.valid.eq(0)
+                # Delay 1
+                yield delayln.sink.payload.delay.eq(float_to_fp(6))
+                yield
+                sample_out = (yield delayln.source.payload.sample) & 0xFFFF
+                print(f". in=---\tout1={hex(sample_out)}\tout2=---\tout3=---")
+                # Delay 2
+                yield delayln.sink.payload.delay.eq(float_to_fp(2))
+                yield
+                sample_out = (yield delayln.source.payload.sample) & 0xFFFF
+                print(f". in=---\tout1=---\tout2={hex(sample_out)}\tout3=---")
+                # Delay 3
+                yield delayln.sink.payload.delay.eq(float_to_fp(9))
+                yield
+                sample_out = (yield delayln.source.payload.sample) & 0xFFFF
+                print(f". in=---\tout1=---\tout2=---\tout3={hex(sample_out)}")
+
+        run_simulation(dut, generator(dut), vcd_name="test_delayline.vcd")
+
