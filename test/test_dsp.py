@@ -279,6 +279,120 @@ class DelayLine(Module):
             )
         ]
 
+class PitchShift:
+    def __init__(self, delayln, mac, xfade=64, sw=16, dw=32, fbits=16):
+        stype = (sw, True) # signed, sw-wide samples
+        dtype = (dw, True) # signed, dw-wide pitch
+
+        # Source for next sample
+        self.source = Endpoint([("sample", stype)])
+
+        # Strobe to produce next sample.
+        # Produces a new sample on transition LO -> HI
+        self.sample_strobe = Signal()
+
+        # Current pitch shift
+        self.pitch = Signal(dtype)
+        # Size of grains / pitch shift window
+        self.window_sz = Signal(16)
+
+        # Delayline, MAC ports (TODO: schedule 2x in sequence)
+        self.delayln_sink, self.delayln_source = delayln.get_port()
+        self.mac_sink, self.mac_source = mac.get_port()
+
+        # Current position in delay line 0 (+= pitch every sample)
+        self.delay0 = Signal(dtype)
+        # Current position in delay line 1
+        self.delay1 = Signal(dtype)
+        # Last samples from delay lines
+        self.sample0 = Signal(stype)
+        self.sample1 = Signal(stype)
+        # Envelope values
+        self.env0 = Signal(dtype)
+        self.env1 = Signal(dtype)
+        # Last samples from delay lines after MAC operation
+        self.scaled0 = Signal(dtype)
+        self.scaled1 = Signal(dtype)
+
+        bits_in_xfade = int(math.log2(xfade))
+
+        self.comb += [
+            self.delay1.eq(self.delay0 + window_sz)
+        ]
+
+        fsm = FSM(reset_state="WAIT-STROBE")
+        self.submodules += fsm
+
+        fsm.act("WAIT-STROBE",
+            If(self.sample_strobe,
+               # TODO: do this at end?
+               If(self.delay0 < self.window_sz - 1,
+                   NextValue(self.delay0, self.delay0 + self.pitch),
+               ).Else(
+                   NextValue(self.delay0, 0),
+               )
+               NextState("WAIT-DELAY0"),
+            )
+        )
+        fsm.act("WAIT-DELAY0",
+            self.delayln_sink.payload.delay.eq(self.delay0),
+            self.delayln_sink.valid.eq(1),
+            self.delayln_source.ready.eq(1),
+            If(self.delayln_source.valid,
+               NextValue(self.sample0, self.delayln_source.payload.sample)
+               NextState("WAIT-DELAY1"),
+            )
+        )
+        fsm.act("WAIT-DELAY1",
+            self.delayln_sink.payload.delay.eq(self.delay1),
+            self.delayln_sink.valid.eq(1),
+            self.delayln_source.ready.eq(1),
+            If(self.delayln_source.valid,
+               NextValue(self.sample1, self.delayln_source.payload.sample)
+               NextState("WAIT-ENV"),
+            )
+        )
+        fsm.act("WAIT-ENV",
+           If(self.delay0 < xfade,
+               # to verify: should be 0x0 -> 0xFFFF
+               NextValue(self.env0, (self.delay0 >> (fbits - bits_in_xfade))),
+               NextValue(self.env1, float_to_fp(1.0) - (self.delay0 >> (fbits - bits_in_xfade)))
+           ).Else(
+               NextValue(self.env0, float_to_fp(1.0))
+               NextValue(self.env1, 0)
+           )
+           NextState("WAIT-MAC0"),
+        )
+        fsm.act("WAIT-MAC0",
+            self.mac_sink.payload.a.eq(self.sample0), #TODO: this is 16->32, verify.
+            self.mac_sink.payload.b.eq(self.env0),
+            self.mac_sink.payload.c.eq(0),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.scaled0, self.mac_source.payload.z),
+               NextState("WAIT-MAC1"),
+            )
+        )
+        fsm.act("WAIT-MAC1",
+            self.mac_sink.payload.a.eq(self.sample1),
+            self.mac_sink.payload.b.eq(self.env1),
+            self.mac_sink.payload.c.eq(0),
+            self.mac_sink.valid.eq(1),
+            self.mac_source.ready.eq(1),
+            If(self.mac_source.valid,
+               NextValue(self.scaled1, self.mac_source.payload.z),
+               NextState("WAIT-SOURCE-READY"),
+            )
+        )
+        fsm.act("WAIT-SOURCE-READY",
+            self.source.valid.eq(1),
+            self.source.payload.sample.eq(self.scaled0 + self.scaled1),
+            If(self.source.ready,
+               NextValue(self.source.valid, 0),
+               NextState("WAIT-STROBE"),
+            )
+        )
 
 class TestDSP(unittest.TestCase):
     def test_fixmac(self):
