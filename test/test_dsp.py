@@ -35,19 +35,19 @@ class FixMac(CombinatorialActor):
             )
         ]
 
-class RRMac(Module):
-    def __init__(self, n):
-        self.submodules.mac = mac = FixMac()
+class RRMux(Module):
+    def __init__(self, n, inner):
+        self.submodules.inner = inner
         self.submodules.mux = mux = Multiplexer(
-                layout=mac.sink.description.payload_layout, n=n)
+                layout=inner.sink.description.payload_layout, n=n)
         self.submodules.demux = demux = Demultiplexer(
-                layout=mac.source.description.payload_layout, n=n)
+                layout=inner.source.description.payload_layout, n=n)
 
         self.sel = Signal(max=n)
 
         self.comb += [
-            mux.source.connect(mac.sink),
-            mac.source.connect(demux.sink),
+            mux.source.connect(inner.sink),
+            inner.source.connect(demux.sink),
             mux.sel.eq(self.sel),
             demux.sel.eq(self.sel),
         ]
@@ -294,7 +294,7 @@ class TestDSP(unittest.TestCase):
         run_simulation(dut, generator(dut), vcd_name="test_fixmac.vcd")
 
     def test_rrmac(self):
-        dut = RRMac(n=2)
+        dut = RRMux(n=2, inner=FixMac())
         sink0, source0 = dut.get_port()
         sink1, source1 = dut.get_port()
         #print(verilog.convert(dut))
@@ -325,7 +325,7 @@ class TestDSP(unittest.TestCase):
 
         class DcBlockDUT(Module):
             def __init__(self):
-                self.submodules.rrmac = RRMac(n=2)
+                self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.dc0 = DcBlock(mac=self.rrmac)
                 self.submodules.dc1 = DcBlock(mac=self.rrmac)
 
@@ -358,7 +358,7 @@ class TestDSP(unittest.TestCase):
         print()
         class DcBlockDUT(Module):
             def __init__(self):
-                self.submodules.rrmac = RRMac(n=2)
+                self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.dc0 = DcBlock(mac=self.rrmac)
                 self.submodules.dc1 = DcBlock(mac=self.rrmac)
 
@@ -395,13 +395,12 @@ class TestDSP(unittest.TestCase):
                     yield
         run_simulation(dut, generator(dut), vcd_name="test_dcblock.vcd")
 
-    """
     def test_ladder_lpf_single(self):
         print()
 
         class LadderDUT(Module):
             def __init__(self):
-                self.submodules.rrmac = RRMac(n=2)
+                self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.lpf = LadderLpf(mac=self.rrmac)
 
         dut = LadderDUT()
@@ -434,7 +433,7 @@ class TestDSP(unittest.TestCase):
                     sample_out = yield lpf.source.payload.sample
                     print ("out", hex(sample_out), fp_to_float(sample_out))
         run_simulation(dut, generator(dut), vcd_name="test_lpf.vcd")
-        """
+
     def test_delayline(self):
         print()
 
@@ -444,7 +443,7 @@ class TestDSP(unittest.TestCase):
 
         dut = DelayLineDUT()
 
-        print(verilog.convert(dut))
+        #print(verilog.convert(dut))
 
         def generator(dut):
             samples = [0]*2 + [0xDEAD, 0xBEEF] + [0]*16
