@@ -246,8 +246,9 @@ class DelayLine(Module):
         # self.source: sample at this position in the buffer
         self.comb += [
             # Read pointer must be wrapped to max delay
+            # Should wrap correctly as long as max delay is POW2
             rdpointer.eq(
-                (wrpointer - (self.sink.delay >> fbits)) & (max_delay-1)
+                (wrpointer - (self.sink.delay >> fbits))
             ),
             rport.adr.eq(rdpointer),
             self.source.sample.eq(rport.dat_r),
@@ -612,8 +613,15 @@ class TestDSP(unittest.TestCase):
 
         def generator(dut):
             # Default no pitch shift == 1
-            yield dut.shifter.pitch.eq(float_to_fp(1))
-            yield dut.shifter.window_sz.eq(20) # 20 => max delay 40
+            # 1 == DC
+            # 0.75 == much slower
+            # 0.25 == a bit slower
+            # 0 == passthrough
+            # -0.5 == 1.5x fast?
+            # -1 == 2x fast
+            # -2 == 3x fast
+            yield dut.shifter.pitch.eq(float_to_fp(0.75))
+            yield dut.shifter.window_sz.eq(30) # 20 => max delay 40
 
             samples = [0.2 * math.sin((n / 15) * 2*math.pi) for n in range(100)]
 
@@ -624,6 +632,7 @@ class TestDSP(unittest.TestCase):
                 yield delayln.wsink.valid.eq(1)
                 yield delayln.wsink.payload.sample.eq(float_to_fp(sample))
                 yield
+                yield delayln.wsink.valid.eq(0)
                 # Strobe the pitch shifter
                 yield dut.shifter.sample_strobe.eq(1)
                 yield
