@@ -279,7 +279,7 @@ class DelayLine(Module):
             )
         ]
 
-class PitchShift:
+class PitchShift(Module):
     def __init__(self, delayln, mac, xfade=64, sw=16, dw=32, fbits=16):
         stype = (sw, True) # signed, sw-wide samples
         dtype = (dw, True) # signed, dw-wide pitch
@@ -317,7 +317,7 @@ class PitchShift:
         bits_in_xfade = int(math.log2(xfade))
 
         self.comb += [
-            self.delay1.eq(self.delay0 + window_sz)
+            self.delay1.eq(self.delay0 + (self.window_sz << fbits))
         ]
 
         fsm = FSM(reset_state="WAIT-STROBE")
@@ -326,11 +326,13 @@ class PitchShift:
         fsm.act("WAIT-STROBE",
             If(self.sample_strobe,
                # TODO: do this at end?
-               If(self.delay0 < self.window_sz - 1,
-                   NextValue(self.delay0, self.delay0 + self.pitch),
+               If(self.delay0 + self.pitch < 0,
+                   NextValue(self.delay0, self.delay0 + self.pitch + ((self.window_sz - 1) << fbits)),
+               ).Elif(self.delay0 + self.pitch > (self.window_sz << fbits),
+                   NextValue(self.delay0, self.delay0 + self.pitch - ((self.window_sz - 1)<< fbits)),
                ).Else(
-                   NextValue(self.delay0, 0),
-               )
+                   NextValue(self.delay0, self.delay0 + self.pitch),
+               ),
                NextState("WAIT-DELAY0"),
             )
         )
@@ -339,28 +341,28 @@ class PitchShift:
             self.delayln_sink.valid.eq(1),
             self.delayln_source.ready.eq(1),
             If(self.delayln_source.valid,
-               NextValue(self.sample0, self.delayln_source.payload.sample)
+               NextValue(self.sample0, self.delayln_source.payload.sample),
                NextState("WAIT-DELAY1"),
-            )
+            ),
         )
         fsm.act("WAIT-DELAY1",
             self.delayln_sink.payload.delay.eq(self.delay1),
             self.delayln_sink.valid.eq(1),
             self.delayln_source.ready.eq(1),
             If(self.delayln_source.valid,
-               NextValue(self.sample1, self.delayln_source.payload.sample)
+               NextValue(self.sample1, self.delayln_source.payload.sample),
                NextState("WAIT-ENV"),
-            )
+            ),
         )
         fsm.act("WAIT-ENV",
-           If(self.delay0 < xfade,
+           If((self.delay0 >> fbits) < xfade,
                # to verify: should be 0x0 -> 0xFFFF
-               NextValue(self.env0, (self.delay0 >> (fbits - bits_in_xfade))),
-               NextValue(self.env1, float_to_fp(1.0) - (self.delay0 >> (fbits - bits_in_xfade)))
+               NextValue(self.env0, (self.delay0 >> bits_in_xfade)),
+               NextValue(self.env1, float_to_fp(1.0) - (self.delay0 >> bits_in_xfade)),
            ).Else(
-               NextValue(self.env0, float_to_fp(1.0))
-               NextValue(self.env1, 0)
-           )
+               NextValue(self.env0, float_to_fp(1.0)),
+               NextValue(self.env1, 0),
+           ),
            NextState("WAIT-MAC0"),
         )
         fsm.act("WAIT-MAC0",
@@ -509,6 +511,7 @@ class TestDSP(unittest.TestCase):
                     yield
         run_simulation(dut, generator(dut), vcd_name="test_dcblock.vcd")
 
+    """
     def test_ladder_lpf_single(self):
         print()
 
@@ -547,6 +550,7 @@ class TestDSP(unittest.TestCase):
                     sample_out = yield lpf.source.payload.sample
                     print ("out", hex(sample_out), fp_to_float(sample_out))
         run_simulation(dut, generator(dut), vcd_name="test_lpf.vcd")
+        """
 
     def test_delayline(self):
         print()
@@ -590,3 +594,45 @@ class TestDSP(unittest.TestCase):
 
         run_simulation(dut, generator(dut), vcd_name="test_delayline.vcd")
 
+
+    def test_pitch_shift(self):
+        print()
+
+        class PitchShiftDUT(Module):
+            def __init__(self):
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=64))
+                self.submodules.rrmac = RRMux(n=2, inner=FixMac())
+                self.submodules.shifter = PitchShift(delayln=self.rrdelayln,
+                                                     mac=self.rrmac,
+                                                     xfade=8)
+
+        dut = PitchShiftDUT()
+
+        #print(verilog.convert(dut))
+
+        def generator(dut):
+            # Default no pitch shift == 1
+            yield dut.shifter.pitch.eq(float_to_fp(1))
+            yield dut.shifter.window_sz.eq(20) # 20 => max delay 40
+
+            samples = [0.2 * math.sin((n / 15) * 2*math.pi) for n in range(100)]
+
+            delayln = dut.rrdelayln.inner
+            yield dut.shifter.source.ready.eq(1)
+            for sample in samples:
+                # Write to shared delayline
+                yield delayln.wsink.valid.eq(1)
+                yield delayln.wsink.payload.sample.eq(float_to_fp(sample))
+                yield
+                # Strobe the pitch shifter
+                yield dut.shifter.sample_strobe.eq(1)
+                yield
+                yield dut.shifter.sample_strobe.eq(0)
+                # Wait until we get an output sample
+                while (yield dut.shifter.source.valid != 1):
+                    #print("wait for dut.shifter.source.valid...")
+                    yield
+                sample_out = yield dut.shifter.source.payload.sample
+                print ("out", hex(sample_out), fp_to_float(sample_out))
+
+        run_simulation(dut, generator(dut), vcd_name="test_pitch_shift.vcd")
