@@ -225,9 +225,9 @@ class DelayLine(Module):
         # Create memory and write pointer
         storage = Memory(width=sw, depth=max_delay)
         # Register, incremented on every write.
-        wrpointer = Signal(max=max_delay, reset=0)
+        wrpointer = Signal(max=max_delay, reset=0, name="wrpointer")
         # Wire, address into memory of current read.
-        rdpointer = Signal(max=max_delay)
+        rdpointer = Signal(max=max_delay, name="rdpointer")
 
         # Create dual-port memory
         wport = storage.get_port(write_capable=True)
@@ -595,6 +595,62 @@ class TestDSP(unittest.TestCase):
 
         run_simulation(dut, generator(dut), vcd_name="test_delayline.vcd")
 
+    def test_gen_shifter_core(self):
+
+        class PitchShiftDUT(Module):
+            def __init__(self):
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128))
+                self.submodules.rrmac = RRMux(n=2, inner=FixMac())
+                self.submodules.shifter0 = PitchShift(delayln=self.rrdelayln,
+                                                      mac=self.rrmac,
+                                                      xfade=32)
+                self.submodules.shifter1 = PitchShift(delayln=self.rrdelayln,
+                                                      mac=self.rrmac,
+                                                      xfade=32)
+
+        dut = PitchShiftDUT()
+
+        in0 = Signal((16, True), name="sample_in0")
+        in1 = Signal((16, True), name="sample_in1")
+        in2 = Signal((16, True), name="sample_in2")
+        in3 = Signal((16, True), name="sample_in3")
+        out0 = Signal((16, True), name="sample_out0")
+        out1 = Signal((16, True), name="sample_out1")
+        out2 = Signal((16, True), name="sample_out2")
+        out3 = Signal((16, True), name="sample_out3")
+
+        sample_clk = Signal(name="sample_clk")
+        l_sample_clk = Signal()
+
+        dut.comb += [
+            dut.shifter0.pitch.eq(float_to_fp(-0.5)),
+            dut.shifter0.window_sz.eq(64),
+            dut.shifter0.source.ready.eq(1),
+
+            dut.shifter1.pitch.eq(float_to_fp(0.5)),
+            dut.shifter1.window_sz.eq(64),
+            dut.shifter1.source.ready.eq(1),
+
+            dut.rrdelayln.inner.wsink.valid.eq(
+                sample_clk == 1 and (sample_clk != l_sample_clk)
+            ),
+
+            dut.rrdelayln.inner.wsink.payload.sample.eq(in0),
+        ]
+
+        dut.sync += [
+            If(dut.shifter0.source.valid,
+                out1.eq(dut.shifter0.source.payload.sample)
+            ),
+            If(dut.shifter1.source.valid,
+                out2.eq(dut.shifter1.source.payload.sample)
+            ),
+            l_sample_clk.eq(sample_clk),
+        ]
+
+        print(verilog.convert(dut, name="pitch_shift_migen", ios={sample_clk,
+                                        in0, in1, in2, in3,
+                                        out0, out1, out2, out3}))
 
     def test_pitch_shift(self):
         print()
@@ -611,8 +667,6 @@ class TestDSP(unittest.TestCase):
                                                       xfade=32)
 
         dut = PitchShiftDUT()
-
-        #print(verilog.convert(dut))
 
         def generator(dut):
             # Default no pitch shift == 1
