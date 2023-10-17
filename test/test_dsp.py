@@ -601,11 +601,11 @@ class TestDSP(unittest.TestCase):
 
         class PitchShiftDUT(Module):
             def __init__(self):
-                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=64))
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128))
                 self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.shifter = PitchShift(delayln=self.rrdelayln,
                                                      mac=self.rrmac,
-                                                     xfade=8)
+                                                     xfade=32)
 
         dut = PitchShiftDUT()
 
@@ -620,10 +620,10 @@ class TestDSP(unittest.TestCase):
             # -0.5 == 1.5x fast?
             # -1 == 2x fast
             # -2 == 3x fast
-            yield dut.shifter.pitch.eq(float_to_fp(0.75))
-            yield dut.shifter.window_sz.eq(30) # 20 => max delay 40
+            yield dut.shifter.pitch.eq(float_to_fp(-0.5))
+            yield dut.shifter.window_sz.eq(64) # 20 => max delay 40
 
-            samples = [0.2 * math.sin((n / 15) * 2*math.pi) for n in range(100)]
+            samples = [0.2 * math.sin((n / 15) * 2*math.pi) for n in range(400)]
 
             delayln = dut.rrdelayln.inner
             yield dut.shifter.source.ready.eq(1)
