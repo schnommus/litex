@@ -603,9 +603,12 @@ class TestDSP(unittest.TestCase):
             def __init__(self):
                 self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128))
                 self.submodules.rrmac = RRMux(n=2, inner=FixMac())
-                self.submodules.shifter = PitchShift(delayln=self.rrdelayln,
-                                                     mac=self.rrmac,
-                                                     xfade=32)
+                self.submodules.shifter0 = PitchShift(delayln=self.rrdelayln,
+                                                      mac=self.rrmac,
+                                                      xfade=32)
+                self.submodules.shifter1 = PitchShift(delayln=self.rrdelayln,
+                                                      mac=self.rrmac,
+                                                      xfade=32)
 
         dut = PitchShiftDUT()
 
@@ -620,28 +623,38 @@ class TestDSP(unittest.TestCase):
             # -0.5 == 1.5x fast?
             # -1 == 2x fast
             # -2 == 3x fast
-            yield dut.shifter.pitch.eq(float_to_fp(-0.5))
-            yield dut.shifter.window_sz.eq(64) # 20 => max delay 40
+            yield dut.shifter0.pitch.eq(float_to_fp(-0.5))
+            yield dut.shifter0.window_sz.eq(64)
+            yield dut.shifter1.pitch.eq(float_to_fp(-2))
+            yield dut.shifter1.window_sz.eq(64)
 
             samples = [0.2 * math.sin((n / 15) * 2*math.pi) for n in range(400)]
 
             delayln = dut.rrdelayln.inner
-            yield dut.shifter.source.ready.eq(1)
+            yield dut.shifter0.source.ready.eq(1)
+            yield dut.shifter1.source.ready.eq(1)
             for sample in samples:
                 # Write to shared delayline
                 yield delayln.wsink.valid.eq(1)
                 yield delayln.wsink.payload.sample.eq(float_to_fp(sample))
                 yield
                 yield delayln.wsink.valid.eq(0)
-                # Strobe the pitch shifter
-                yield dut.shifter.sample_strobe.eq(1)
+                # Strobe the pitch shifter0
+                yield dut.shifter0.sample_strobe.eq(1)
+                yield dut.shifter1.sample_strobe.eq(1)
                 yield
-                yield dut.shifter.sample_strobe.eq(0)
-                # Wait until we get an output sample
-                while (yield dut.shifter.source.valid != 1):
-                    #print("wait for dut.shifter.source.valid...")
+                yield dut.shifter0.sample_strobe.eq(0)
+                yield dut.shifter1.sample_strobe.eq(0)
+                # Wait until we get output samples
+                n_results = 0
+                while n_results != 2:
+                    #print("wait for dut.shifterX.source.valid...")
+                    if (yield dut.shifter0.source.valid == 1):
+                        sample_out0 = yield dut.shifter0.source.payload.sample
+                        print ("out", hex(sample_out0), fp_to_float(sample_out0))
+                        n_results += 1
+                    if (yield dut.shifter1.source.valid == 1):
+                        n_results += 1
                     yield
-                sample_out = yield dut.shifter.source.payload.sample
-                print ("out", hex(sample_out), fp_to_float(sample_out))
 
         run_simulation(dut, generator(dut), vcd_name="test_pitch_shift.vcd")
