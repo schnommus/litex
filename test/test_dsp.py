@@ -230,13 +230,13 @@ class DelayLine(Module):
         rdpointer = Signal(max=max_delay, name="rdpointer")
 
         # Create dual-port memory
-        wport = storage.get_port(write_capable=True)
-        # Async read is necessary for passthrough combinatorial read sink/source
-        rport = storage.get_port(async_read=True)
+        wport = storage.get_port(write_capable=True, mode=READ_FIRST)
+        rport = storage.get_port(mode=READ_FIRST)
+
         self.specials += [
             storage,
             wport,
-            rport
+            rport,
         ]
 
         # Connect up read side
