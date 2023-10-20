@@ -392,7 +392,6 @@ class PitchShift(Module):
             self.source.valid.eq(1),
             self.source.payload.sample.eq(self.scaled0 + self.scaled1),
             If(self.source.ready,
-               NextValue(self.source.valid, 0),
                NextState("WAIT-STROBE"),
             )
         )
@@ -630,12 +629,6 @@ class TestDSP(unittest.TestCase):
             dut.shifter1.pitch.eq(float_to_fp(0.5)),
             dut.shifter1.window_sz.eq(64),
             dut.shifter1.source.ready.eq(1),
-
-            dut.rrdelayln.inner.wsink.valid.eq(
-                sample_clk == 1 and (sample_clk != l_sample_clk)
-            ),
-
-            dut.rrdelayln.inner.wsink.payload.sample.eq(in0),
         ]
 
         dut.sync += [
@@ -645,12 +638,38 @@ class TestDSP(unittest.TestCase):
             If(dut.shifter1.source.valid,
                 out2.eq(dut.shifter1.source.payload.sample)
             ),
+            dut.rrdelayln.inner.wsink.valid.eq(
+                (sample_clk != l_sample_clk) & sample_clk
+            ),
+            dut.rrdelayln.inner.wsink.payload.sample.eq(in0),
             l_sample_clk.eq(sample_clk),
         ]
 
-        print(verilog.convert(dut, name="pitch_shift_migen", ios={sample_clk,
-                                        in0, in1, in2, in3,
-                                        out0, out1, out2, out3}))
+        cd = ClockDomain("sys")
+        dut.clock_domains += cd
+
+        clk = Signal(name="clk")
+        rst = Signal(name="rst")
+
+        dut.comb += [
+            cd.clk.eq(clk),
+            cd.rst.eq(rst),
+        ]
+
+        jack = Signal(name="jack")
+
+        with open("pitch_shift_migen.sv", "w") as f:
+            s = verilog.convert(dut, name="pitch_shift_migen",
+                                  create_clock_domains=False,
+                                  ios={clk, rst, sample_clk, jack,
+                                            in0, in1, in2, in3,
+                                            out0, out1, out2, out3})
+            s = str(s)
+            s = s.replace("\nmodule pitch_shift_migen(",
+                          "\nmodule pitch_shift_migen #("
+                          "\n    W=16"
+                          "\n)(")
+            f.write(s)
 
     def test_pitch_shift(self):
         print()
