@@ -36,27 +36,30 @@ class FixMac(CombinatorialActor):
         ]
 
 class RRMux(Module):
-    def __init__(self, n, inner):
+    def __init__(self, n, inner, latency=0):
         self.submodules.inner = inner
         self.submodules.mux = mux = Multiplexer(
                 layout=inner.sink.description.payload_layout, n=n)
         self.submodules.demux = demux = Demultiplexer(
                 layout=inner.source.description.payload_layout, n=n)
 
-        self.sel = Signal(max=n)
+        self.sel1 = Signal(math.ceil(math.log2(n)))
+        self.sel2 = Signal(math.ceil(math.log2(n)))
 
         self.comb += [
             mux.source.connect(inner.sink),
             inner.source.connect(demux.sink),
-            mux.sel.eq(self.sel),
-            demux.sel.eq(self.sel),
+            mux.sel.eq(self.sel1),
+            demux.sel.eq(self.sel2),
+            # Must wrap properly i.e selX is POW2
+            self.sel2.eq(self.sel1 - latency),
         ]
 
         self.sync += [
-            If(self.sel != n,
-               self.sel.eq(self.sel + 1)
+            If(self.sel1 != n-1,
+               self.sel1.eq(self.sel1 + 1)
             ).Else(
-               self.sel.eq(0)
+               self.sel1.eq(0)
             )
         ]
 
@@ -245,18 +248,16 @@ class DelayLine(Module):
         #            at current sample + delay samples (wrapped).
         # self.source: sample at this position in the buffer
         self.comb += [
-            # Read pointer must be wrapped to max delay
-            # Should wrap correctly as long as max delay is POW2
-            rdpointer.eq(
-                (wrpointer - (self.sink.delay >> fbits))
-            ),
             rport.adr.eq(rdpointer),
             self.source.sample.eq(rport.dat_r),
-            # Connect as stream CombinatorialActor
-            self.source.valid.eq(self.sink.valid),
-            self.source.first.eq(self.sink.first),
-            self.source.last.eq(self.sink.last),
-            self.sink.ready.eq(self.source.ready),
+            # Set read pointer on valid delay
+            If(self.sink.valid,
+                # Read pointer must be wrapped to max delay
+                # Should wrap correctly as long as max delay is POW2
+                rdpointer.eq(
+                    (wrpointer - (self.sink.delay >> fbits))
+                ),
+            ),
         ]
 
         # Connect up write side
@@ -269,15 +270,20 @@ class DelayLine(Module):
             self.wsink.ready.eq(1),
         ]
 
-        # Increment circular buffer pointer on every write operation.
         self.sync += [
+            # Connect as stream, latency 1
+            self.source.valid.eq(self.sink.valid),
+            self.source.first.eq(self.sink.first),
+            self.source.last.eq(self.sink.last),
+            self.sink.ready.eq(self.source.ready),
+            # Increment circular buffer pointer on every write operation.
             If(wport.we,
                If(wrpointer != (max_delay - 1),
                    wrpointer.eq(wrpointer + 1)
                ).Else(
                    wrpointer.eq(0)
                )
-            )
+            ),
         ]
 
 class PitchShift(Module):
@@ -566,28 +572,41 @@ class TestDSP(unittest.TestCase):
         def generator(dut):
             samples = [0]*2 + [0xDEAD, 0xBEEF] + [0]*16
             delayln = dut.delayln
-            yield delayln.sink.valid.eq(1)
+            yield delayln.sink.valid.eq(0)
             yield delayln.source.ready.eq(1)
             for sample in samples:
                 # Write
                 yield delayln.wsink.valid.eq(1)
                 yield delayln.wsink.payload.sample.eq(sample)
                 yield
-                print(f". in={hex(sample)}\tout1=---\tout2=---\tout3=---")
+                print(f"> in={hex(sample)}\tout1=---\tout2=---\tout3=---")
                 # Stop write
                 yield delayln.wsink.valid.eq(0)
+                yield
                 # Delay 1
+                yield
                 yield delayln.sink.payload.delay.eq(float_to_fp(6))
+                yield delayln.sink.valid.eq(1)
+                yield
+                yield delayln.sink.valid.eq(0)
                 yield
                 sample_out = (yield delayln.source.payload.sample) & 0xFFFF
                 print(f". in=---\tout1={hex(sample_out)}\tout2=---\tout3=---")
                 # Delay 2
+                yield
                 yield delayln.sink.payload.delay.eq(float_to_fp(2))
+                yield delayln.sink.valid.eq(1)
+                yield
+                yield delayln.sink.valid.eq(0)
                 yield
                 sample_out = (yield delayln.source.payload.sample) & 0xFFFF
                 print(f". in=---\tout1=---\tout2={hex(sample_out)}\tout3=---")
                 # Delay 3
+                yield
                 yield delayln.sink.payload.delay.eq(float_to_fp(9))
+                yield delayln.sink.valid.eq(1)
+                yield
+                yield delayln.sink.valid.eq(0)
                 yield
                 sample_out = (yield delayln.source.payload.sample) & 0xFFFF
                 print(f". in=---\tout1=---\tout2=---\tout3={hex(sample_out)}")
@@ -598,14 +617,14 @@ class TestDSP(unittest.TestCase):
 
         class PitchShiftDUT(Module):
             def __init__(self):
-                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128))
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=2048), latency=1)
                 self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.shifter0 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
-                                                      xfade=32)
+                                                      xfade=512)
                 self.submodules.shifter1 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
-                                                      xfade=32)
+                                                      xfade=512)
 
         dut = PitchShiftDUT()
 
@@ -676,7 +695,7 @@ class TestDSP(unittest.TestCase):
 
         class PitchShiftDUT(Module):
             def __init__(self):
-                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128))
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128), latency=1)
                 self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.shifter0 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
