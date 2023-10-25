@@ -334,9 +334,9 @@ class PitchShift(Module):
             If(self.sample_strobe,
                # TODO: do this at end?
                If(self.delay0 + self.pitch < 0,
-                   NextValue(self.delay0, self.delay0 + self.pitch + ((self.window_sz - 1) << fbits)),
+                   NextValue(self.delay0, self.delay0 + self.pitch + ((self.window_sz) << fbits)),
                ).Elif(self.delay0 + self.pitch > (self.window_sz << fbits),
-                   NextValue(self.delay0, self.delay0 + self.pitch - ((self.window_sz - 1)<< fbits)),
+                   NextValue(self.delay0, self.delay0 + self.pitch - ((self.window_sz)<< fbits)),
                ).Else(
                    NextValue(self.delay0, self.delay0 + self.pitch),
                ),
@@ -725,10 +725,10 @@ class TestDSP(unittest.TestCase):
             # -2 == 3x fast
             yield dut.shifter0.pitch.eq(float_to_fp(-0.5))
             yield dut.shifter0.window_sz.eq(64)
-            yield dut.shifter1.pitch.eq(float_to_fp(-2))
+            yield dut.shifter1.pitch.eq(float_to_fp(0.5))
             yield dut.shifter1.window_sz.eq(64)
 
-            samples = [0.2 * math.sin((n / 15) * 2*math.pi) for n in range(400)]
+            samples = [0.2 * math.sin((n / 40) * 2*math.pi) for n in range(400)]
 
             delayln = dut.rrdelayln.inner
             yield dut.shifter0.source.ready.eq(1)
@@ -737,12 +737,11 @@ class TestDSP(unittest.TestCase):
                 # Write to shared delayline
                 yield delayln.wsink.valid.eq(1)
                 yield delayln.wsink.payload.sample.eq(float_to_fp(sample))
-                yield
-                yield delayln.wsink.valid.eq(0)
                 # Strobe the pitch shifter0
                 yield dut.shifter0.sample_strobe.eq(1)
                 yield dut.shifter1.sample_strobe.eq(1)
                 yield
+                yield delayln.wsink.valid.eq(0)
                 yield dut.shifter0.sample_strobe.eq(0)
                 yield dut.shifter1.sample_strobe.eq(0)
                 # Wait until we get output samples
