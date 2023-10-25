@@ -698,7 +698,7 @@ class TestDSP(unittest.TestCase):
                                   ios={clk, rst, sample_clk, jack,
                                             in0, in1, in2, in3,
                                             out0, out1, out2, out3},
-                                regular_comb=False)
+                                regular_comb=True)
             s = str(s)
             s = s.replace("\nmodule pitch_shift_migen (",
                           "\nmodule pitch_shift_migen #("
