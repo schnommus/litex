@@ -617,14 +617,14 @@ class TestDSP(unittest.TestCase):
 
         class PitchShiftDUT(Module):
             def __init__(self):
-                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=2048), latency=1)
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=512), latency=1)
                 self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.shifter0 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
-                                                      xfade=512)
+                                                      xfade=64)
                 self.submodules.shifter1 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
-                                                      xfade=512)
+                                                      xfade=64)
 
         dut = PitchShiftDUT()
 
@@ -644,11 +644,11 @@ class TestDSP(unittest.TestCase):
 
         dut.comb += [
             dut.shifter0.pitch.eq(float_to_fp(-0.5)),
-            dut.shifter0.window_sz.eq(1024),
+            dut.shifter0.window_sz.eq(256),
             dut.shifter0.source.ready.eq(1),
 
             dut.shifter1.pitch.eq(float_to_fp(0.5)),
-            dut.shifter1.window_sz.eq(1024),
+            dut.shifter1.window_sz.eq(256),
             dut.shifter1.source.ready.eq(1),
 
             sample_strobe.eq(
@@ -658,17 +658,24 @@ class TestDSP(unittest.TestCase):
 
         dut.sync += [
             If(dut.shifter0.source.valid,
+                out0.eq(in0), # can be elsewhere
                 out1.eq(dut.shifter0.source.payload.sample)
             ),
             If(dut.shifter1.source.valid,
                 out2.eq(dut.shifter1.source.payload.sample)
             ),
-            dut.rrdelayln.inner.wsink.valid.eq(sample_strobe),
+
             If(sample_strobe,
                 dut.rrdelayln.inner.wsink.payload.sample.eq(in0),
+                dut.rrdelayln.inner.wsink.valid.eq(1),
+                dut.shifter0.sample_strobe.eq(1),
+                dut.shifter1.sample_strobe.eq(1),
+            ).Else(
+                dut.rrdelayln.inner.wsink.valid.eq(0),
+                dut.shifter0.sample_strobe.eq(0),
+                dut.shifter1.sample_strobe.eq(0),
             ),
-            dut.shifter0.sample_strobe.eq(sample_strobe),
-            dut.shifter1.sample_strobe.eq(sample_strobe),
+
             l_sample_clk.eq(sample_clk),
         ]
 
@@ -703,14 +710,14 @@ class TestDSP(unittest.TestCase):
 
         class PitchShiftDUT(Module):
             def __init__(self):
-                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=128), latency=1)
+                self.submodules.rrdelayln = RRMux(n=2, inner=DelayLine(max_delay=512), latency=1)
                 self.submodules.rrmac = RRMux(n=2, inner=FixMac())
                 self.submodules.shifter0 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
-                                                      xfade=32)
+                                                      xfade=64)
                 self.submodules.shifter1 = PitchShift(delayln=self.rrdelayln,
                                                       mac=self.rrmac,
-                                                      xfade=32)
+                                                      xfade=64)
 
         dut = PitchShiftDUT()
 
@@ -724,11 +731,11 @@ class TestDSP(unittest.TestCase):
             # -1 == 2x fast
             # -2 == 3x fast
             yield dut.shifter0.pitch.eq(float_to_fp(-0.5))
-            yield dut.shifter0.window_sz.eq(64)
+            yield dut.shifter0.window_sz.eq(256)
             yield dut.shifter1.pitch.eq(float_to_fp(0.5))
-            yield dut.shifter1.window_sz.eq(64)
+            yield dut.shifter1.window_sz.eq(256)
 
-            samples = [0.2 * math.sin((n / 40) * 2*math.pi) for n in range(400)]
+            samples = [0.2 * math.sin((n / 40) * 2*math.pi) + 0.2 * math.sin((n / 25) * 2*math.pi)for n in range(800)]
 
             delayln = dut.rrdelayln.inner
             yield dut.shifter0.source.ready.eq(1)
