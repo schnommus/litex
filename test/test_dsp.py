@@ -640,14 +640,20 @@ class TestDSP(unittest.TestCase):
         sample_clk = Signal(name="sample_clk")
         l_sample_clk = Signal()
 
+        sample_strobe = Signal()
+
         dut.comb += [
             dut.shifter0.pitch.eq(float_to_fp(-0.5)),
-            dut.shifter0.window_sz.eq(64),
+            dut.shifter0.window_sz.eq(1024),
             dut.shifter0.source.ready.eq(1),
 
             dut.shifter1.pitch.eq(float_to_fp(0.5)),
-            dut.shifter1.window_sz.eq(64),
+            dut.shifter1.window_sz.eq(1024),
             dut.shifter1.source.ready.eq(1),
+
+            sample_strobe.eq(
+                (sample_clk != l_sample_clk) & sample_clk
+            )
         ]
 
         dut.sync += [
@@ -657,10 +663,12 @@ class TestDSP(unittest.TestCase):
             If(dut.shifter1.source.valid,
                 out2.eq(dut.shifter1.source.payload.sample)
             ),
-            dut.rrdelayln.inner.wsink.valid.eq(
-                (sample_clk != l_sample_clk) & sample_clk
+            dut.rrdelayln.inner.wsink.valid.eq(sample_strobe),
+            If(sample_strobe,
+                dut.rrdelayln.inner.wsink.payload.sample.eq(in0),
             ),
-            dut.rrdelayln.inner.wsink.payload.sample.eq(in0),
+            dut.shifter0.sample_strobe.eq(sample_strobe),
+            dut.shifter1.sample_strobe.eq(sample_strobe),
             l_sample_clk.eq(sample_clk),
         ]
 
