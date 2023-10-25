@@ -2,8 +2,8 @@ import unittest
 import random
 
 from migen import *
-from migen.fhdl import verilog
 
+from litex.gen.fhdl import verilog
 from litex.gen.sim import *
 from litex.soc.interconnect.stream import *
 
@@ -301,7 +301,7 @@ class PitchShift(Module):
         # Current pitch shift
         self.pitch = Signal(dtype)
         # Size of grains / pitch shift window
-        self.window_sz = Signal(16)
+        self.window_sz = Signal((16, True))
 
         # Delayline, MAC ports (TODO: schedule 2x in sequence)
         self.delayln_sink, self.delayln_source = delayln.get_port()
@@ -333,10 +333,10 @@ class PitchShift(Module):
         fsm.act("WAIT-STROBE",
             If(self.sample_strobe,
                # TODO: do this at end?
-               If(self.delay0 + self.pitch < 0,
-                   NextValue(self.delay0, self.delay0 + self.pitch + ((self.window_sz) << fbits)),
+               If(self.delay0 < -self.pitch,
+                   NextValue(self.delay0, (self.delay0 + (self.window_sz << fbits)) + self.pitch),
                ).Elif(self.delay0 + self.pitch > (self.window_sz << fbits),
-                   NextValue(self.delay0, self.delay0 + self.pitch - ((self.window_sz)<< fbits)),
+                   NextValue(self.delay0, self.delay0 + self.pitch - (self.window_sz << fbits)),
                ).Else(
                    NextValue(self.delay0, self.delay0 + self.pitch),
                ),
@@ -643,11 +643,11 @@ class TestDSP(unittest.TestCase):
         sample_strobe = Signal()
 
         dut.comb += [
-            dut.shifter0.pitch.eq(float_to_fp(-0.5)),
+            dut.shifter0.pitch.eq(-Constant(float_to_fp(0.5), (32, True))),
             dut.shifter0.window_sz.eq(256),
             dut.shifter0.source.ready.eq(1),
 
-            dut.shifter1.pitch.eq(float_to_fp(0.5)),
+            dut.shifter1.pitch.eq(Constant(float_to_fp(0.5), (32, True))),
             dut.shifter1.window_sz.eq(256),
             dut.shifter1.source.ready.eq(1),
 
@@ -693,13 +693,14 @@ class TestDSP(unittest.TestCase):
         jack = Signal(name="jack")
 
         with open("pitch_shift_migen.sv", "w") as f:
+            # WARN: use regular_comb=False for hacks to allow simulators to run.
             s = verilog.convert(dut, name="pitch_shift_migen",
-                                  create_clock_domains=False,
                                   ios={clk, rst, sample_clk, jack,
                                             in0, in1, in2, in3,
-                                            out0, out1, out2, out3})
+                                            out0, out1, out2, out3},
+                                regular_comb=False)
             s = str(s)
-            s = s.replace("\nmodule pitch_shift_migen(",
+            s = s.replace("\nmodule pitch_shift_migen (",
                           "\nmodule pitch_shift_migen #("
                           "\n    W=16"
                           "\n)(")
