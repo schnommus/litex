@@ -297,6 +297,7 @@ class ClockDomainCrossing(Module):
 # Mux/Demux ----------------------------------------------------------------------------------------
 
 class Multiplexer(Module):
+    """n sinks => 1 source, with sel line."""
     def __init__(self, layout, n):
         self.source = Endpoint(layout)
         sinks = []
@@ -315,6 +316,7 @@ class Multiplexer(Module):
 
 
 class Demultiplexer(Module):
+    """1 sink => n sources, with sel line."""
     def __init__(self, layout, n):
         self.sink = Endpoint(layout)
         sources = []
@@ -335,6 +337,7 @@ class Demultiplexer(Module):
 # Gate ---------------------------------------------------------------------------------------------
 
 class Gate(Module):
+    """1 sink => 1 source, with enable line, optional ready when disabled"""
     def __init__(self, layout, sink_ready_when_disabled=False):
         self.sink   = Endpoint(layout)
         self.source = Endpoint(layout)
@@ -353,6 +356,7 @@ class Gate(Module):
 # Converter ----------------------------------------------------------------------------------------
 
 class _UpConverter(Module):
+    """1 sink => 1 source. Source is wider than sink i.e smaller elements packed into larger ones."""
     def __init__(self, nbits_from, nbits_to, ratio, reverse):
         self.sink   = sink   = Endpoint([("data", nbits_from)])
         self.source = source = Endpoint([("data", nbits_to), ("valid_token_count", bits_for(ratio))])
@@ -408,6 +412,7 @@ class _UpConverter(Module):
 
 
 class _DownConverter(Module):
+    """1 sink => 1 source. Source is smaller than sink i.e larger elements unpacked into smaller ones."""
     def __init__(self, nbits_from, nbits_to, ratio, reverse):
         self.sink   = sink   = Endpoint([("data", nbits_from)])
         self.source = source = Endpoint([("data", nbits_to), ("valid_token_count", 1)])
@@ -479,6 +484,16 @@ def _get_converter_ratio(nbits_from, nbits_to):
 
 
 class Converter(Module):
+    """1 sink => 1 source. Both must be an integer multiple of each other in width.
+    Depending on nbits_{from|to}, will resolve as Upconverter or Downconverter,
+    which packs or unpacks a stream into packets of the appropriate width.
+
+    For example:
+        Converter(nbits_from=8, nbits_to=16) (upconverter)
+          0xDE 0xAD 0xBE 0xEF => stream of 0xDEAD 0xBEEF
+        Converter(nbits_from=16, nbits_to=8) (downconverter)
+          0xDEAD 0xBEEF => 0xDE 0xAD 0xBE 0xEF
+    """
     def __init__(self, nbits_from, nbits_to,
         reverse                  = False,
         report_valid_token_count = False):
@@ -499,6 +514,10 @@ class Converter(Module):
 
 
 class StrideConverter(Module):
+    """1 sink => 1 source.
+    Not used anywhere outside AXI bridge stuff?
+    Create a converter that operates on SPECIFIC fields of the sink and ignores the rest?
+    Okay, not really sure what this is..."""
     def __init__(self, description_from, description_to, reverse=False):
         self.sink   = sink   = Endpoint(description_from)
         self.source = source = Endpoint(description_to)
@@ -569,6 +588,36 @@ def inc_mod(s, m):
 
 
 class Gearbox(Module):
+    """1 sink => 1 source. Not used very often..
+    Put this in a DIFFERENT clock domain to the original data source.
+    Connect sink to already clock-domain-crossed stream of the source.
+
+    Q: What is the difference between this and Converter?
+    A: Not sure...
+
+    Example usage in HDMI serializer cores/video.py:
+
+    >>>
+    # Clock Domain Crossing.
+    self.cdc = stream.ClockDomainCrossing([("data", 10)], cd_from=clock_domain, cd_to=clock_domain + "5x")
+    self.comb += self.cdc.sink.valid.eq(1)
+    self.comb += self.cdc.sink.data.eq(data_i)
+
+    # 10:2 Gearbox.
+    self.gearbox = ClockDomainsRenamer(clock_domain + "5x")(stream.Gearbox(i_dw=10, o_dw=2, msb_first=False))
+    self.comb += self.cdc.source.connect(self.gearbox.sink)
+
+    # 2:1 Output DDR.
+    self.comb += self.gearbox.source.ready.eq(1)
+    self.specials += DDROutput(
+        clk = ClockSignal(clock_domain + "5x"),
+        i1  = self.gearbox.source.data[0],
+        i2  = self.gearbox.source.data[1],
+        o   = data_o,
+    )
+    <<<
+
+    """
     def __init__(self, i_dw, o_dw, msb_first=True):
         self.sink   = sink   = Endpoint([("data", i_dw)])
         self.source = source = Endpoint([("data", o_dw)])
@@ -632,6 +681,11 @@ class Gearbox(Module):
 # Shifter ------------------------------------------------------------------------------------------
 
 class Shifter(PipelinedActor):
+    """1 sink => 1 source.
+    Shift elements of a stream by up to dw bits (width of input stream)
+    Seems like --
+    0b0011 0b1000 (shift 1) => (latency 2 later) 0b0001 0b1100
+    """
     def __init__(self, dw, shift=None):
         self.shift  = Signal(max=dw) if shift is None else shift
         self.sink   = sink   = Endpoint([("data", dw)])
@@ -656,6 +710,7 @@ class Shifter(PipelinedActor):
 # Monitor ------------------------------------------------------------------------------------------
 
 class Monitor(Module, AutoCSR):
+    """Attach to an endpoint to get some stats on it through CSRs."""
     def __init__(self, endpoint, count_width=32, clock_domain="sys",
         with_tokens     = False,
         with_overflows  = False,
@@ -834,6 +889,7 @@ class Buffer(Module):
 # Cast ---------------------------------------------------------------------------------------------
 
 class Cast(CombinatorialActor):
+    """1 sink => 1 source. Cast 2 streams of same width but different layout."""
     def __init__(self, layout_from, layout_to, reverse_from=False, reverse_to=False):
         self.sink   = Endpoint(_rawbits_layout(layout_from))
         self.source = Endpoint(_rawbits_layout(layout_to))
@@ -854,6 +910,9 @@ class Cast(CombinatorialActor):
 # Unpack/Pack --------------------------------------------------------------------------------------
 
 class Unpack(Module):
+    """1 sink => 1 source.
+    sink => {chunk0, chunk1 .. chunk[n-1]}
+    source => {layout with width of 1 chunk} N elements produced for each sink"""
     def __init__(self, n, layout_to, reverse=False):
         self.source = source = Endpoint(layout_to)
         description_from = Endpoint(layout_to).description
