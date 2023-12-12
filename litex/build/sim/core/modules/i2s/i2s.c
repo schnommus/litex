@@ -77,12 +77,14 @@ static int i2s_add_pads(void *sess, struct pad_list_s *plist)
     goto out;
   }
   pads = plist->pads;
-  if(!strcmp(plist->name, "eurorack_pmod_p0")) {
-    litex_sim_module_pads_get(pads, "sdin1", (void**)&s->sdin1);
-    litex_sim_module_pads_get(pads, "sdout1", (void**)&s->sdout1);
+  if(!strcmp(plist->name, "eurorack_pmod_clk0")) {
     litex_sim_module_pads_get(pads, "lrck", (void**)&s->lrck);
     litex_sim_module_pads_get(pads, "bick", (void**)&s->bick);
     litex_sim_module_pads_get(pads, "mclk", (void**)&s->mclk);
+  }
+  if(!strcmp(plist->name, "eurorack_pmod0")) {
+    litex_sim_module_pads_get(pads, "sdin1", (void**)&s->sdin1);
+    litex_sim_module_pads_get(pads, "sdout1", (void**)&s->sdout1);
   }
 out:
   return ret;
