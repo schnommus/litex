@@ -1,0 +1,21 @@
+diff --git a/meson.build b/meson.build
+index ee2411ad2..a49581cce 100644
+--- a/meson.build
++++ b/meson.build
+@@ -35,7 +35,7 @@
+ project('picolibc', 'c',
+ 	default_options: [
+ 	  'buildtype=minsize',
+-	  'debug=true',
++	  'debug=false',
+ 	  'c_std=c18',
+ 	  'b_staticpic=false',
+           'warning_level=2',
+@@ -193,6 +193,7 @@ endif
+ c_flags = cc.get_supported_arguments(['-fno-common', '-frounding-math', '-fsignaling-nans',
+ 				      '-Wno-unsupported-floating-point-opt', '-fno-stack-protector',
+ 				      '-fno-builtin-copysignl'])
++c_flags += ['-fno-plt', '-fno-pic']
+ c_args += c_flags
+ native_c_args += c_flags
+ 
