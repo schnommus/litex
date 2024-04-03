@@ -740,8 +740,8 @@ class VideoFrameBuffer(LiteXModule):
         elif (depth == 8):
             self.comb += [
                 source.r.eq(video_pipe_source.data[ 0: 8]),
-                source.g.eq(Cat(Signal(8, reset = 0))),
-                source.b.eq(Cat(Signal(8, reset = 0))),
+                source.g.eq(video_pipe_source.data[ 0: 8]),
+                source.b.eq(video_pipe_source.data[ 0: 8]),
             ]
         else:
             assert(False)
