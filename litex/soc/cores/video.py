@@ -675,7 +675,8 @@ class VideoFrameBuffer(LiteXModule):
 
         self.depth = depth = {
             "rgb888" : 32,
-            "rgb565" : 16
+            "rgb565" : 16,
+            "r8"     : 8,
         }[format]
 
         # # #
@@ -730,12 +731,20 @@ class VideoFrameBuffer(LiteXModule):
                source.g.eq(video_pipe_source.data[ 8:16]),
                source.b.eq(video_pipe_source.data[16:24]),
             ]
-        else: # depth == 16
+        elif (depth == 16):
             self.comb += [
                 source.r.eq(Cat(Signal(3, reset = 0), video_pipe_source.data[11:16])),
                 source.g.eq(Cat(Signal(2, reset = 0), video_pipe_source.data[ 5:11])),
                 source.b.eq(Cat(Signal(3, reset = 0), video_pipe_source.data[ 0: 5])),
             ]
+        elif (depth == 8):
+            self.comb += [
+                source.r.eq(video_pipe_source.data[ 0: 8]),
+                source.g.eq(Cat(Signal(8, reset = 0))),
+                source.b.eq(Cat(Signal(8, reset = 0))),
+            ]
+        else:
+            assert(False)
 
         # Underflow.
         self.comb += self.underflow.eq(~source.valid)
